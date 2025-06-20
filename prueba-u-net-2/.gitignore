@@ -1,0 +1,12 @@
+images/
+masks/
+processed_dataset/
+raw_dataset/
+training_output/
+training_output_fast/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pyw
+*.pyz

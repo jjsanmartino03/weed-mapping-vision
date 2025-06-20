@@ -1,0 +1,22 @@
+{
+    "workspace": "proyecto-finalmapeo-de-malezas",
+    "project": "identificacion-malezas",
+    "version": 5,
+    "raw_data_dir": "raw_dataset",
+    "processed_data_dir": "processed_dataset",
+    "output_dir": "training_output",
+    "batch_size": 1,
+    "num_epochs": 10,
+    "learning_rate": 1e-4,
+    "weight_decay": 1e-4,
+    "image_size": [512, 512],
+    "num_workers": 4,
+    "train_ratio": 0.7,
+    "val_ratio": 0.2,
+    "test_ratio": 0.1,
+    "bce_weight": 0.5,
+    "dice_weight": 0.5,
+    "bilinear": false,
+    "save_checkpoint_every": 5,
+    "early_stopping_patience": 10
+} 
