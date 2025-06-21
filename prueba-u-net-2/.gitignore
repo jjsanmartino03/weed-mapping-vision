@@ -5,6 +5,8 @@ raw_dataset/
 training_output/
 training_output_*/
 training_output_fast/
+test_images
+test_results
 __pycache__/
 *.pyc
 *.pyo
