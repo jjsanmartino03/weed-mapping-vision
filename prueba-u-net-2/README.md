@@ -6,24 +6,29 @@ This repository contains a complete U-Net training pipeline for semantic segment
 
 - **Automated Data Pipeline**: Downloads and processes data from Roboflow
 - **YOLO to Mask Conversion**: Converts YOLO polygon annotations to binary masks
+- **Patch-Based Training**: Optional patch extraction for high-resolution images
 - **Data Augmentation**: Comprehensive augmentation pipeline using Albumentations
 - **Advanced Loss Functions**: BCE + Dice Loss combination for better segmentation
 - **Training Monitoring**: TensorBoard logging and visualization utilities
 - **Model Checkpointing**: Automatic saving of best models based on validation metrics
+- **Intelligent Testing**: Patch-based inference for models trained with patches
 
 ## 📁 Project Structure
 
 ```
 prueba-u-net-2/
-├── train_unet.py          # Main training script
-├── unet_model.py          # U-Net model definition
-├── dataset.py             # PyTorch dataset and data loaders
-├── data_utils.py          # Data processing utilities
-├── losses.py              # Loss functions and metrics
-├── visualization.py       # Visualization utilities
-├── config.json           # Configuration file
-├── requirements.txt      # Python dependencies
-└── README.md            # This file
+├── train_unet.py              # Main training script
+├── unet_model.py              # U-Net model definition
+├── dataset.py                 # PyTorch dataset and data loaders
+├── data_utils.py              # Data processing utilities
+├── patch_creator.py           # Patch extraction utilities
+├── losses.py                  # Loss functions and metrics
+├── visualization.py           # Visualization utilities
+├── test_model.py              # Model testing and inference
+├── example_patch_testing.py   # Example patch-based testing
+├── config.json               # Configuration file
+├── requirements.txt          # Python dependencies
+└── README.md                # This file
 ```
 
 ## 🛠️ Installation
@@ -46,6 +51,42 @@ Run the training pipeline with your Roboflow API key:
 
 ```bash
 python train_unet.py --api_key YOUR_ROBOFLOW_API_KEY
+```
+
+### Patch-Based Training
+
+For high-resolution images, enable patch-based training in your config:
+
+```json
+{
+  "patches": {
+    "enabled": true,
+    "patch_size": 512,
+    "overlap": 64,
+    "balance_strategy": "weed_focused",
+    "min_weed_pixels": 10
+  }
+}
+```
+
+### Model Testing
+
+Test your trained model on new images:
+
+```bash
+# Test single image with automatic patch detection
+python test_model.py --model training_output/best_model.pth --config config.json --image test_image.jpg --overlay
+
+# Test directory of images
+python test_model.py --model training_output/best_model.pth --config config.json --images_dir test_images/ --overlay
+```
+
+### Example Testing Script
+
+Use the provided example for patch-based testing:
+
+```bash
+python example_patch_testing.py
 ```
 
 ### Advanced Usage
@@ -193,3 +234,66 @@ Feel free to contribute by:
 ## 📄 License
 
 This project is available for academic and research purposes. 
+
+## 🔍 Patch-Based Processing
+
+### Why Use Patches?
+
+For high-resolution UAV images (e.g., 5280×3956), patch-based processing offers:
+
+- **Preserved Detail**: 100% resolution vs 87% loss from downsampling
+- **Data Multiplication**: 45 images → 1,500+ patches for training
+- **Better Small Object Detection**: Weeds become 50-200px instead of 10-50px
+- **Improved Performance**: Expected Dice improvement from 0.40 → 0.65-0.75
+
+### Patch Configuration
+
+```json
+{
+  "patches": {
+    "enabled": true,           // Enable/disable patch extraction
+    "patch_size": 512,         // Size of square patches
+    "overlap": 64,             // Overlap between patches (pixels)
+    "balance_strategy": "weed_focused",  // "weed_focused", "balanced", "all_weed"
+    "min_weed_pixels": 10,     // Minimum weed pixels to include patch
+    "max_patches_per_image": null  // Limit patches per image (null = no limit)
+  }
+}
+```
+
+### Balance Strategies
+
+- **`weed_focused`**: 70% patches with weeds, 30% background
+- **`balanced`**: 50% patches with weeds, 50% background  
+- **`all_weed`**: Only patches containing weeds
+
+### Patch-Based Inference
+
+When testing models trained with patches, the system automatically:
+
+1. **Detects Patch Training**: Reads config to check if patches were used
+2. **Extracts Test Patches**: Splits test images into overlapping patches
+3. **Batch Prediction**: Processes patches efficiently with progress updates
+4. **Reconstruction**: Combines patch predictions with weighted blending
+5. **Full Resolution Output**: Returns predictions at original image resolution
+
+**Key Benefits:**
+- Maintains training/testing consistency
+- Preserves full image resolution
+- Handles memory efficiently
+- Provides smooth prediction blending
+
+### Example Usage
+
+```python
+from test_model import ModelTester
+
+# Initialize with config (auto-detects patch settings)
+tester = ModelTester("best_model.pth", "config.json")
+
+# Test high-resolution image with automatic patching
+prediction, probabilities, _, original = tester.predict("high_res_image.jpg")
+
+print(f"Original image: {original.shape}")      # e.g., (3956, 5280, 3)
+print(f"Prediction: {prediction.shape}")        # e.g., (3956, 5280)
+``` 

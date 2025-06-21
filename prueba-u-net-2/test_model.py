@@ -5,20 +5,37 @@ import numpy as np
 import matplotlib.pyplot as plt
 from PIL import Image
 import argparse
+import json
 from unet_model import UNet
 from visualization import denormalize_image, create_overlay_visualization
 import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 class ModelTester:
-    def __init__(self, model_path, device=None):
+    def __init__(self, model_path, config_path=None, device=None):
         """
         Initialize model tester
         
         Args:
             model_path: Path to trained model checkpoint
+            config_path: Path to config file (to check if patches were used)
             device: Device to run inference on
         """
+        # Load config if provided
+        self.config = {}
+        if config_path and os.path.exists(config_path):
+            with open(config_path, 'r') as f:
+                self.config = json.load(f)
+        
+        # Check if patches were used during training
+        self.use_patches = self.config.get('patches', {}).get('enabled', False)
+        self.patch_size = self.config.get('patches', {}).get('patch_size', 512)
+        self.patch_overlap = self.config.get('patches', {}).get('overlap', 64)
+        
+        print(f"Patch-based inference: {'Enabled' if self.use_patches else 'Disabled'}")
+        if self.use_patches:
+            print(f"Patch size: {self.patch_size}x{self.patch_size}, Overlap: {self.patch_overlap}")
+        
         # Proper device detection for Apple Silicon, CUDA, and CPU
         if device:
             self.device = device
@@ -57,13 +74,89 @@ class ModelTester:
         
         return model
     
-    def preprocess_image(self, image_path, target_size=(1024, 1024)):
+    def extract_patches(self, image, patch_size, overlap):
+        """
+        Extract overlapping patches from image
+        
+        Args:
+            image: Input image (H, W, C)
+            patch_size: Size of patches
+            overlap: Overlap between patches
+            
+        Returns:
+            patches: List of patches
+            positions: List of (row, col) positions for reconstruction
+        """
+        h, w = image.shape[:2]
+        stride = patch_size - overlap
+        
+        patches = []
+        positions = []
+        
+        for row in range(0, h - patch_size + 1, stride):
+            for col in range(0, w - patch_size + 1, stride):
+                # Handle edge cases
+                end_row = min(row + patch_size, h)
+                end_col = min(col + patch_size, w)
+                start_row = max(end_row - patch_size, 0)
+                start_col = max(end_col - patch_size, 0)
+                
+                patch = image[start_row:end_row, start_col:end_col]
+                patches.append(patch)
+                positions.append((start_row, start_col))
+        
+        return patches, positions
+    
+    def reconstruct_from_patches(self, patch_predictions, positions, original_shape, patch_size, overlap):
+        """
+        Reconstruct full prediction from patch predictions
+        
+        Args:
+            patch_predictions: List of patch predictions
+            positions: List of patch positions
+            original_shape: Shape of original image (H, W)
+            patch_size: Size of patches
+            overlap: Overlap between patches
+            
+        Returns:
+            Reconstructed prediction
+        """
+        h, w = original_shape[:2]
+        prediction = np.zeros((h, w), dtype=np.float32)
+        weight_map = np.zeros((h, w), dtype=np.float32)
+        
+        for pred, (row, col) in zip(patch_predictions, positions):
+            end_row = min(row + patch_size, h)
+            end_col = min(col + patch_size, w)
+            
+            # Create weight map for blending (higher weight in center)
+            patch_weight = np.ones_like(pred, dtype=np.float32)
+            if overlap > 0:
+                # Reduce weight at edges for smooth blending
+                fade_size = overlap // 2
+                for i in range(fade_size):
+                    weight = (i + 1) / fade_size
+                    patch_weight[i, :] *= weight  # Top edge
+                    patch_weight[-i-1, :] *= weight  # Bottom edge
+                    patch_weight[:, i] *= weight  # Left edge
+                    patch_weight[:, -i-1] *= weight  # Right edge
+            
+            prediction[row:end_row, col:end_col] += pred * patch_weight
+            weight_map[row:end_row, col:end_col] += patch_weight
+        
+        # Normalize by weight map
+        weight_map[weight_map == 0] = 1  # Avoid division by zero
+        prediction = prediction / weight_map
+        
+        return prediction
+
+    def preprocess_image(self, image_path, target_size=None):
         """
         Preprocess image for inference
         
         Args:
             image_path: Path to input image
-            target_size: Target size for resizing
+            target_size: Target size for resizing (only used if not using patches)
         
         Returns:
             Preprocessed image tensor and original image
@@ -72,15 +165,42 @@ class ModelTester:
         original_image = cv2.imread(image_path)
         original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
         
-        # Resize image
-        image = cv2.resize(original_image, target_size, interpolation=cv2.INTER_LINEAR)
+        if self.use_patches:
+            # For patch-based inference, keep original resolution
+            return original_image, original_image
+        else:
+            # For full-image inference, resize
+            if target_size is None:
+                target_size = (1024, 1024)
+            image = cv2.resize(original_image, target_size, interpolation=cv2.INTER_LINEAR)
+            
+            # Apply transforms
+            transformed = self.transform(image=image)
+            image_tensor = transformed['image'].unsqueeze(0)  # Add batch dimension
+            
+            return image_tensor, original_image
+
+    def predict_patch(self, patch):
+        """
+        Predict on a single patch
         
+        Args:
+            patch: Input patch (H, W, C)
+            
+        Returns:
+            Prediction probabilities
+        """
         # Apply transforms
-        transformed = self.transform(image=image)
-        image_tensor = transformed['image'].unsqueeze(0)  # Add batch dimension
+        transformed = self.transform(image=patch)
+        patch_tensor = transformed['image'].unsqueeze(0).to(self.device)
         
-        return image_tensor, original_image, image
-    
+        # Make prediction
+        with torch.no_grad():
+            logits = self.model(patch_tensor)
+            probabilities = torch.sigmoid(logits)
+        
+        return probabilities.cpu().squeeze().numpy()
+
     def predict(self, image_path, threshold=0.5):
         """
         Make prediction on a single image
@@ -92,8 +212,61 @@ class ModelTester:
         Returns:
             Prediction mask, confidence map, and processed image
         """
+        if self.use_patches:
+            return self.predict_with_patches(image_path, threshold)
+        else:
+            return self.predict_full_image(image_path, threshold)
+    
+    def predict_with_patches(self, image_path, threshold=0.5):
+        """
+        Make prediction using patch-based approach
+        """
+        # Load original image
+        original_image = cv2.imread(image_path)
+        original_image = cv2.cvtColor(original_image, cv2.COLOR_BGR2RGB)
+        
+        print(f"Processing image: {image_path}")
+        print(f"Original size: {original_image.shape[:2]}")
+        
+        # Extract patches
+        patches, positions = self.extract_patches(
+            original_image, self.patch_size, self.patch_overlap
+        )
+        
+        print(f"Extracted {len(patches)} patches")
+        
+        # Predict on each patch
+        patch_predictions = []
+        for i, patch in enumerate(patches):
+            if i % 50 == 0:  # Progress update
+                print(f"Processing patch {i+1}/{len(patches)}")
+            
+            pred_prob = self.predict_patch(patch)
+            patch_predictions.append(pred_prob)
+            
+            # Clear GPU cache periodically
+            if self.device.type == 'mps' and i % 10 == 0:
+                torch.mps.empty_cache()
+        
+        # Reconstruct full prediction
+        probabilities = self.reconstruct_from_patches(
+            patch_predictions, positions, original_image.shape, 
+            self.patch_size, self.patch_overlap
+        )
+        
+        # Apply threshold
+        prediction = (probabilities > threshold).astype(np.float32)
+        
+        print("Patch-based prediction completed!")
+        
+        return prediction, probabilities, original_image, original_image
+    
+    def predict_full_image(self, image_path, threshold=0.5):
+        """
+        Make prediction on full resized image (original method)
+        """
         # Preprocess image
-        image_tensor, original_image, resized_image = self.preprocess_image(image_path)
+        image_tensor, original_image = self.preprocess_image(image_path)
         
         # Move to device
         image_tensor = image_tensor.to(self.device)
@@ -107,6 +280,9 @@ class ModelTester:
         # Move to CPU and convert to numpy
         probabilities = probabilities.cpu().squeeze().numpy()
         prediction = prediction.cpu().squeeze().numpy()
+        
+        # Get resized image for visualization
+        resized_image = cv2.resize(original_image, (1024, 1024), interpolation=cv2.INTER_LINEAR)
         
         return prediction, probabilities, resized_image, original_image
     
@@ -229,6 +405,7 @@ class ModelTester:
 def main():
     parser = argparse.ArgumentParser(description='Test trained U-Net model on images')
     parser.add_argument('--model', type=str, required=True, help='Path to model checkpoint')
+    parser.add_argument('--config', type=str, help='Path to config file (to check if patches were used)')
     parser.add_argument('--image', type=str, help='Path to single image for testing')
     parser.add_argument('--images_dir', type=str, help='Directory containing images for batch testing')
     parser.add_argument('--output_dir', type=str, default='test_results', help='Output directory for results')
@@ -240,7 +417,7 @@ def main():
     os.makedirs(args.output_dir, exist_ok=True)
     
     # Initialize tester
-    tester = ModelTester(args.model)
+    tester = ModelTester(args.model, args.config)
     
     if args.image:
         # Test single image
