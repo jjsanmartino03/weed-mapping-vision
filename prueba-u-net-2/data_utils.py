@@ -6,6 +6,9 @@ from PIL import Image
 import shutil
 from sklearn.model_selection import train_test_split
 import yaml
+from tqdm import tqdm
+from collections import defaultdict
+from patch_creator import PatchDatasetCreator
 
 def create_directories(base_path):
     """Create necessary directory structure"""
@@ -189,4 +192,153 @@ def resize_image_and_mask(image, mask, target_size=(1024, 1024)):
     mask_resized = mask_pil.resize(target_size, Image.NEAREST)
     mask_resized = np.array(mask_resized) / 255.0
     
-    return image_resized, mask_resized 
+    return image_resized, mask_resized
+
+def create_patch_dataset(config, processed_data_dir):
+    """
+    Create patch dataset from processed images and masks
+    
+    Args:
+        config: Configuration dictionary with patch settings
+        processed_data_dir: Directory containing processed images and masks
+    
+    Returns:
+        Path to created patch dataset
+    """
+    patch_config = config['patches']
+    
+    if not patch_config['enabled']:
+        print("Patches disabled in config. Using original dataset.")
+        return processed_data_dir
+    
+    print("🔧 Creating patch dataset...")
+    
+    # Create patch dataset creator
+    creator = PatchDatasetCreator(
+        patch_size=patch_config['patch_size'],
+        overlap=patch_config['overlap'],
+        min_weed_pixels=patch_config['min_weed_pixels']
+    )
+    
+    # Create patch dataset for each split
+    patch_base_dir = os.path.join(os.path.dirname(processed_data_dir), 'patch_dataset')
+    os.makedirs(patch_base_dir, exist_ok=True)
+    
+    splits = ['train', 'val', 'test']
+    all_patch_stats = {}
+    
+    for split in splits:
+        print(f"\n📁 Processing {split} split...")
+        
+        images_dir = os.path.join(processed_data_dir, 'images', split)
+        masks_dir = os.path.join(processed_data_dir, 'masks', split)
+        output_dir = os.path.join(patch_base_dir, split)
+        
+        if not os.path.exists(images_dir) or not os.path.exists(masks_dir):
+            print(f"Warning: {split} split not found, skipping")
+            continue
+        
+        # Create patches for this split
+        patches = creator.create_patch_dataset(
+            images_dir=images_dir,
+            masks_dir=masks_dir,
+            output_dir=output_dir,
+            balance_strategy=patch_config['balance_strategy']
+        )
+        
+        # Save patch statistics
+        all_patch_stats[split] = {
+            'total_patches': len(patches),
+            'weed_patches': sum(1 for p in patches if p['has_weeds']),
+            'background_patches': sum(1 for p in patches if not p['has_weeds'])
+        }
+    
+    # Create proper directory structure for compatibility with existing data loader
+    patch_output_dir = patch_base_dir
+    
+    # Create directories for each split
+    for split in splits:
+        os.makedirs(os.path.join(patch_output_dir, 'images', split), exist_ok=True)
+        os.makedirs(os.path.join(patch_output_dir, 'masks', split), exist_ok=True)
+    
+    # Move patches to proper structure
+    patch_count = 0
+    unified_split_info = {'train': [], 'val': [], 'test': []}
+    
+    for split in splits:
+        split_source_dir = os.path.join(patch_base_dir, split)
+        if not os.path.exists(split_source_dir):
+            continue
+            
+        split_images_source = os.path.join(split_source_dir, 'images')
+        split_masks_source = os.path.join(split_source_dir, 'masks')
+        
+        split_images_dest = os.path.join(patch_output_dir, 'images', split)
+        split_masks_dest = os.path.join(patch_output_dir, 'masks', split)
+        
+        if os.path.exists(split_images_source):
+            for img_file in os.listdir(split_images_source):
+                if img_file.endswith('.png'):
+                    # Move image
+                    src_img = os.path.join(split_images_source, img_file)
+                    dst_img = os.path.join(split_images_dest, img_file)
+                    shutil.move(src_img, dst_img)
+                    
+                    # Move corresponding mask
+                    mask_file = img_file.replace('.png', '_mask.png')
+                    src_mask = os.path.join(split_masks_source, mask_file)
+                    dst_mask = os.path.join(split_masks_dest, mask_file)
+                    
+                    if os.path.exists(src_mask):
+                        shutil.move(src_mask, dst_mask)
+                        unified_split_info[split].append(img_file)
+                        patch_count += 1
+        
+        # Remove empty split directories
+        if os.path.exists(split_source_dir):
+            shutil.rmtree(split_source_dir)
+    
+    # Save patch dataset info
+    patch_info = {
+        'patch_config': patch_config,
+        'statistics': all_patch_stats,
+        'total_patches': patch_count,
+        'splits': unified_split_info
+    }
+    
+    with open(os.path.join(patch_output_dir, 'patch_info.json'), 'w') as f:
+        json.dump(patch_info, f, indent=2)
+    
+    print(f"\n✅ Patch dataset created successfully!")
+    print(f"📊 Total patches: {patch_count}")
+    print(f"📁 Location: {patch_output_dir}")
+    
+    # Print statistics summary
+    total_weed = sum(stats['weed_patches'] for stats in all_patch_stats.values())
+    total_bg = sum(stats['background_patches'] for stats in all_patch_stats.values())
+    
+    print(f"🌿 Weed patches: {total_weed}")
+    print(f"🌱 Background patches: {total_bg}")
+    print(f"⚖️ Balance ratio: {total_weed/(total_weed+total_bg)*100:.1f}% weeds")
+    
+    return patch_output_dir
+
+def prepare_dataset(config):
+    """
+    Prepare dataset for training - handles both regular and patch datasets
+    
+    Args:
+        config: Configuration dictionary
+    
+    Returns:
+        Path to prepared dataset
+    """
+    processed_data_dir = config['processed_data_dir']
+    
+    # Check if patches are enabled
+    if config.get('patches', {}).get('enabled', False):
+        print("🔧 Patch mode enabled - creating patch dataset...")
+        return create_patch_dataset(config, processed_data_dir)
+    else:
+        print("📁 Using regular dataset (no patches)")
+        return processed_data_dir 

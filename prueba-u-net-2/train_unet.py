@@ -15,7 +15,7 @@ from roboflow import Roboflow
 from unet_model import UNet
 from dataset import create_data_loaders
 from losses import BCEDiceLoss, dice_coefficient, iou_score
-from data_utils import split_dataset, create_directories
+from data_utils import split_dataset, create_directories, prepare_dataset
 from visualization import save_sample_predictions, plot_training_history
 
 class UNetTrainer:
@@ -97,17 +97,30 @@ class UNetTrainer:
             print("Raw dataset not found. Downloading...")
             self.download_dataset()
         
-        # Split dataset and create masks
-        split_info = split_dataset(
-            images_dir=train_images_dir,
-            labels_dir=train_labels_dir,
-            output_base_dir=self.config['processed_data_dir'],
-            train_ratio=self.config.get('train_ratio', 0.7),
-            val_ratio=self.config.get('val_ratio', 0.2),
-            test_ratio=self.config.get('test_ratio', 0.1)
-        )
+        # Split dataset and create masks (only if processed dataset doesn't exist)
+        if not os.path.exists(self.config['processed_data_dir']):
+            print("Creating processed dataset...")
+            split_info = split_dataset(
+                images_dir=train_images_dir,
+                labels_dir=train_labels_dir,
+                output_base_dir=self.config['processed_data_dir'],
+                train_ratio=self.config.get('train_ratio', 0.7),
+                val_ratio=self.config.get('val_ratio', 0.2),
+                test_ratio=self.config.get('test_ratio', 0.1)
+            )
+        else:
+            print("Processed dataset already exists.")
+            split_info = None
+        
+        # Prepare final dataset (handles patches if enabled)
+        final_dataset_path = prepare_dataset(self.config)
+        
+        # Update config with final dataset path
+        self.config['final_data_dir'] = final_dataset_path
         
         print("Dataset preparation completed!")
+        print(f"Final dataset location: {final_dataset_path}")
+        
         return split_info
     
     def train_epoch(self, data_loader):
@@ -357,9 +370,10 @@ def main():
     # Prepare dataset
     split_info = trainer.prepare_dataset()
     
-    # Create data loaders
+    # Create data loaders using final dataset path
+    data_path = config.get('final_data_dir', config['processed_data_dir'])
     data_loaders, datasets = create_data_loaders(
-        config['processed_data_dir'],
+        data_path,
         batch_size=config['batch_size'],
         image_size=config['image_size'],
         num_workers=config['num_workers']
@@ -367,6 +381,16 @@ def main():
     
     # Print dataset info
     print("\nDataset Information:")
+    patch_enabled = config.get('patches', {}).get('enabled', False)
+    print(f"Patch mode: {'Enabled' if patch_enabled else 'Disabled'}")
+    
+    if patch_enabled:
+        patch_config = config['patches']
+        print(f"Patch size: {patch_config['patch_size']}x{patch_config['patch_size']}")
+        print(f"Overlap: {patch_config['overlap']}px")
+        print(f"Balance strategy: {patch_config['balance_strategy']}")
+        print(f"Min weed pixels: {patch_config['min_weed_pixels']}")
+    
     for split, loader in data_loaders.items():
         print(f"{split.capitalize()}: {len(datasets[split])} samples, {len(loader)} batches")
     
