@@ -3,6 +3,7 @@ masks/
 processed_dataset/
 raw_dataset/
 training_output/
+training_output_*/
 training_output_fast/
 __pycache__/
 *.pyc

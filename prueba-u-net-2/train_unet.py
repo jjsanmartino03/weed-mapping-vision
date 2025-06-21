@@ -280,7 +280,7 @@ class UNetTrainer:
             self.save_checkpoint(epoch + 1, is_best)
             
             # Save sample predictions every few epochs
-            if epoch == 1 or ((epoch + 1) % 5 == 0):
+            if (epoch + 1) % 5 == 0:
                 save_sample_predictions(
                     self.model, val_loader, self.device,
                     save_path=os.path.join(self.output_dir, 'results', f'predictions_epoch_{epoch+1}.png'),
