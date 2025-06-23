@@ -26,6 +26,5 @@
         "min_weed_pixels": 10,
         "balance_strategy": "weed_focused",
         "max_patches_per_image": null
-    },
-    "inference_threshold": 0.85
+    }
 } 

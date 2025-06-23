@@ -362,7 +362,7 @@ class ModelTester:
             plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Visualization saved to: {save_path}")
         
-        plt.show()
+        # plt.show()
     
     def create_overlay(self, image_path, threshold=0.5, save_path=None):
         """
@@ -407,7 +407,7 @@ class ModelTester:
             overlay_path = save_path.replace('.png', '_overlay_only.png')
             cv2.imwrite(overlay_path, cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
         
-        plt.show()
+        # plt.show()
         
         # Print some statistics
         total_pixels = prediction.shape[0] * prediction.shape[1]
