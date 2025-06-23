@@ -22,8 +22,8 @@ CORS(app)  # Enable CORS for frontend communication
 # Configuration
 UPLOAD_FOLDER = 'api_uploads'
 RESULTS_FOLDER = 'api_results'
-MODEL_PATH = 'training_output/checkpoints/best_model.pth'
-CONFIG_PATH = 'configV9.0.json'
+MODEL_PATH = 'models/v9.pth'
+CONFIG_PATH = 'configs/configV9.0.json'
 DEFAULT_THRESHOLD = 0.98
 
 # Create directories if they don't exist
