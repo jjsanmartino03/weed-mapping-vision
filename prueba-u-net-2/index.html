@@ -33,6 +33,8 @@
             border-radius: 10px;
             margin-bottom: 30px;
             background-color: #ecf0f1;
+            cursor: pointer;
+            transition: all 0.3s ease;
         }
         
         .upload-section.dragover {
@@ -40,9 +42,77 @@
             background-color: #d5f4e6;
         }
         
-        input[type="file"] {
-            margin: 10px 0;
+        .upload-section.has-image {
+            border-color: #27ae60;
+            background-color: #d5f4e6;
+            cursor: default;
+        }
+        
+        .upload-section.has-image .upload-text {
+            display: none;
+        }
+        
+        .image-preview {
+            display: none;
+            margin: 20px 0;
+        }
+        
+        .image-preview.show {
+            display: block;
+        }
+        
+        .image-preview img {
+            max-width: 300px;
+            max-height: 200px;
+            border-radius: 8px;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+        
+        .selected-image-info {
+            display: none;
+            background: #27ae60;
+            color: white;
             padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+        }
+        
+        .selected-image-info.show {
+            display: block;
+        }
+        
+        input[type="file"] {
+            display: none;
+        }
+        
+        .file-input-btn {
+            background-color: #3498db;
+            color: white;
+            padding: 10px 20px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            margin: 10px 5px;
+        }
+        
+        .file-input-btn:hover {
+            background-color: #2980b9;
+        }
+        
+        .change-image-btn {
+            background-color: #f39c12;
+            color: white;
+            padding: 8px 15px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 14px;
+            margin: 10px 5px;
+        }
+        
+        .change-image-btn:hover {
+            background-color: #e67e22;
         }
         
         input[type="number"] {
@@ -168,19 +238,34 @@
         <h1>🌱 Weed Detection API - Test Interface</h1>
         
         <div class="upload-section" id="uploadSection">
-            <h3>Upload Image for Weed Detection</h3>
-            <p>Drag and drop an image here or click to select</p>
+            <div class="upload-text">
+                <h3>Upload Image for Weed Detection</h3>
+                <p>Drag and drop an image here or click to select</p>
+                <button type="button" class="file-input-btn" onclick="openFileSelector()">Choose Image</button>
+            </div>
+            
             <input type="file" id="imageInput" accept="image/*" />
-            <br>
-            <label>
-                Detection Threshold: 
-                <input type="number" id="thresholdInput" min="0" max="1" step="0.01" value="0.98" />
-            </label>
-            <br><br>
-            <button id="uploadBtn" onclick="uploadImage()">
-                <span id="uploadText">Upload & Process</span>
-                <span id="uploadSpinner" class="loading hidden"></span>
-            </button>
+            
+            <div class="selected-image-info" id="selectedImageInfo">
+                <p>✅ Image selected: <span id="fileName"></span></p>
+                <button type="button" class="change-image-btn" onclick="changeImage()">Change Image</button>
+            </div>
+            
+            <div class="image-preview" id="imagePreview">
+                <img id="previewImg" src="" alt="Preview" />
+            </div>
+            
+            <div>
+                <label>
+                    Detection Threshold: 
+                    <input type="number" id="thresholdInput" min="0" max="1" step="0.01" value="0.98" />
+                </label>
+                <br><br>
+                <button id="uploadBtn" onclick="uploadImage()">
+                    <span id="uploadText">Upload & Process</span>
+                    <span id="uploadSpinner" class="loading hidden"></span>
+                </button>
+            </div>
         </div>
         
         <div id="statusDiv"></div>
@@ -196,13 +281,20 @@
         const API_BASE = 'http://localhost:5001';
         let currentImageId = null;
 
-        // Drag and drop functionality
+        // Elements
         const uploadSection = document.getElementById('uploadSection');
         const imageInput = document.getElementById('imageInput');
+        const selectedImageInfo = document.getElementById('selectedImageInfo');
+        const imagePreview = document.getElementById('imagePreview');
+        const previewImg = document.getElementById('previewImg');
+        const fileName = document.getElementById('fileName');
 
+        // Drag and drop functionality
         uploadSection.addEventListener('dragover', (e) => {
             e.preventDefault();
-            uploadSection.classList.add('dragover');
+            if (!uploadSection.classList.contains('has-image')) {
+                uploadSection.classList.add('dragover');
+            }
         });
 
         uploadSection.addEventListener('dragleave', () => {
@@ -213,19 +305,66 @@
             e.preventDefault();
             uploadSection.classList.remove('dragover');
             
-            const files = e.dataTransfer.files;
-            if (files.length > 0) {
-                imageInput.files = files;
+            if (!uploadSection.classList.contains('has-image')) {
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleImageSelection(files[0]);
+                }
             }
         });
 
-        uploadSection.addEventListener('click', () => {
-            imageInput.click();
+        uploadSection.addEventListener('click', (e) => {
+            // Only open file selector if clicking on the upload section itself and no image is selected
+            if (e.target === uploadSection && !uploadSection.classList.contains('has-image')) {
+                openFileSelector();
+            }
         });
 
-        imageInput.addEventListener('click', (e) => {
-            e.stopPropagation();
+        imageInput.addEventListener('change', (e) => {
+            if (e.target.files.length > 0) {
+                handleImageSelection(e.target.files[0]);
+            }
         });
+
+        function openFileSelector() {
+            imageInput.click();
+        }
+
+        function changeImage() {
+            resetImageSelection();
+            openFileSelector();
+        }
+
+        function handleImageSelection(file) {
+            // Update UI to show selected image
+            uploadSection.classList.add('has-image');
+            selectedImageInfo.classList.add('show');
+            imagePreview.classList.add('show');
+            
+            // Set file name
+            fileName.textContent = file.name;
+            
+            // Show image preview
+            const reader = new FileReader();
+            reader.onload = (e) => {
+                previewImg.src = e.target.result;
+            };
+            reader.readAsDataURL(file);
+            
+            // Update file input
+            const dt = new DataTransfer();
+            dt.items.add(file);
+            imageInput.files = dt.files;
+        }
+
+        function resetImageSelection() {
+            uploadSection.classList.remove('has-image');
+            selectedImageInfo.classList.remove('show');
+            imagePreview.classList.remove('show');
+            previewImg.src = '';
+            fileName.textContent = '';
+            imageInput.value = '';
+        }
 
         function showStatus(message, type = 'processing') {
             const statusDiv = document.getElementById('statusDiv');
