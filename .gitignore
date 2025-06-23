@@ -6,3 +6,5 @@ patch_dataset
 venv/
 .ipynb_checkpoints/
 data_*
+api_results/
+api_uploads/
