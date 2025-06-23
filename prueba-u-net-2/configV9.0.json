@@ -1,7 +1,7 @@
 {
     "workspace": "proyecto-finalmapeo-de-malezas",
     "project": "identificacion-malezas",
-    "version": 8,
+    "version": 9,
     "raw_data_dir": "raw_dataset",
     "processed_data_dir": "processed_dataset",
     "output_dir": "training_output",
@@ -18,14 +18,14 @@
     "dice_weight": 0.5,
     "bilinear": false,
     "save_checkpoint_every": 5,
-    "early_stopping_patience": 10,
+    "early_stopping_patience": 5,
     "patches": {
         "enabled": true,
         "patch_size": 512,
         "overlap": 64,
         "min_weed_pixels": 10,
-        "balance_strategy": "all_weed",
+        "balance_strategy": "weed_focused",
         "max_patches_per_image": null
     },
-    "inference_threshold": 0.9
+    "inference_threshold": 0.85
 } 

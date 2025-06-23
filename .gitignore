@@ -5,3 +5,4 @@ patch_dataset
 .DS_Store
 venv/
 .ipynb_checkpoints/
+data_*

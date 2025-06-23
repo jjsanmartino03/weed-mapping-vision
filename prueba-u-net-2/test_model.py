@@ -93,9 +93,23 @@ class ModelTester:
         patches = []
         positions = []
         
-        for row in range(0, h - patch_size + 1, stride):
-            for col in range(0, w - patch_size + 1, stride):
-                # Handle edge cases
+        # Calculate patch positions to ensure full coverage
+        row_positions = list(range(0, h - patch_size + 1, stride))
+        col_positions = list(range(0, w - patch_size + 1, stride))
+        
+        # Add final positions to cover the entire image
+        if len(row_positions) == 0 or row_positions[-1] + patch_size < h:
+            row_positions.append(max(0, h - patch_size))
+        if len(col_positions) == 0 or col_positions[-1] + patch_size < w:
+            col_positions.append(max(0, w - patch_size))
+        
+        # Remove duplicates while preserving order
+        row_positions = list(dict.fromkeys(row_positions))
+        col_positions = list(dict.fromkeys(col_positions))
+        
+        for row in row_positions:
+            for col in col_positions:
+                # Ensure we don't go out of bounds
                 end_row = min(row + patch_size, h)
                 end_col = min(col + patch_size, w)
                 start_row = max(end_row - patch_size, 0)
@@ -364,7 +378,7 @@ class ModelTester:
         
         # Create overlay (red for predicted weeds)
         overlay = resized_image.copy()
-        overlay[prediction > 0.5] = [255, 0, 0]  # Red overlay for weeds
+        overlay[prediction > threshold] = [255, 0, 0]  # Red overlay for weeds
         
         # Blend with original image
         alpha = 0.3
@@ -397,7 +411,7 @@ class ModelTester:
         
         # Print some statistics
         total_pixels = prediction.shape[0] * prediction.shape[1]
-        weed_pixels = np.sum(prediction > 0.5)
+        weed_pixels = np.sum(prediction > threshold)
         weed_percentage = (weed_pixels / total_pixels) * 100
         
         print(f"Weed coverage: {weed_percentage:.2f}% ({weed_pixels}/{total_pixels} pixels)")
