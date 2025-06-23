@@ -12,7 +12,7 @@ import albumentations as A
 from albumentations.pytorch import ToTensorV2
 
 class ModelTester:
-    def __init__(self, model_path, config_path=None, device=None):
+    def __init__(self, model_path, config_path=None, device=None, headless=False):
         """
         Initialize model tester
         
@@ -20,7 +20,15 @@ class ModelTester:
             model_path: Path to trained model checkpoint
             config_path: Path to config file (to check if patches were used)
             device: Device to run inference on
+            headless: If True, use non-GUI matplotlib backend for server environments
         """
+        # Set matplotlib backend for headless operation
+        if headless:
+            import matplotlib
+            matplotlib.use('Agg')
+            
+        import matplotlib.pyplot as plt
+        self.plt = plt
         # Load config if provided
         self.config = {}
         if config_path and os.path.exists(config_path):
@@ -300,6 +308,73 @@ class ModelTester:
         
         return prediction, probabilities, resized_image, original_image
     
+    def create_mask_borders(self, mask, border_width=2):
+        """
+        Create borders from binary mask using morphological operations
+        
+        Args:
+            mask: Binary mask (H, W)
+            border_width: Width of the border in pixels
+            
+        Returns:
+            Border mask
+        """
+        # Convert to uint8 if needed
+        if mask.dtype != np.uint8:
+            mask_uint8 = (mask * 255).astype(np.uint8)
+        else:
+            mask_uint8 = mask
+        
+        # Create border using morphological operations
+        kernel = np.ones((border_width*2+1, border_width*2+1), np.uint8)
+        
+        # Dilate the mask
+        dilated = cv2.dilate(mask_uint8, kernel, iterations=1)
+        
+        # Erode the mask
+        eroded = cv2.erode(mask_uint8, kernel, iterations=1)
+        
+        # Border is the difference between dilated and eroded
+        border = dilated - eroded
+        
+        # Alternative method: use edge detection
+        # This gives cleaner borders for complex shapes
+        edges = cv2.Canny(mask_uint8, 50, 150)
+        
+        # Combine both methods for better results
+        combined_border = np.maximum(border, edges)
+        
+        return combined_border > 0
+    
+    def overlay_mask_borders(self, image, border_mask, color=[0, 255, 0], thickness=1):
+        """
+        Overlay mask borders on original image
+        
+        Args:
+            image: Original image (H, W, C)
+            border_mask: Binary border mask (H, W)
+            color: RGB color for borders [R, G, B]
+            thickness: Border thickness
+            
+        Returns:
+            Image with overlaid borders
+        """
+        overlay_image = image.copy()
+        
+        # Make sure border_mask is boolean
+        if border_mask.dtype != bool:
+            border_mask = border_mask > 0
+        
+        # If thickness > 1, dilate the border
+        if thickness > 1:
+            kernel = np.ones((thickness, thickness), np.uint8)
+            border_mask = cv2.dilate(border_mask.astype(np.uint8), kernel, iterations=1) > 0
+        
+        # Apply color to border pixels
+        overlay_image[border_mask] = color
+        
+        return overlay_image
+    
     def predict_batch(self, image_paths, threshold=0.5):
         """
         Make predictions on multiple images
@@ -337,30 +412,47 @@ class ModelTester:
         # Make prediction
         prediction, probabilities, resized_image, original_image = self.predict(image_path, threshold)
         
-        # Create visualization
-        fig, axes = plt.subplots(1, 3, figsize=(15, 5))
+        # Create mask borders overlay
+        mask_borders = self.create_mask_borders(prediction)
+        overlay_image = self.overlay_mask_borders(resized_image, mask_borders)
+        
+        # Create visualization with 4 subplots
+        fig, axes = self.plt.subplots(2, 2, figsize=(15, 12))
         
         # Original image
-        axes[0].imshow(resized_image)
-        axes[0].set_title('Original Image')
-        axes[0].axis('off')
+        axes[0, 0].imshow(resized_image)
+        axes[0, 0].set_title('Original Image')
+        axes[0, 0].axis('off')
         
         # Confidence map
-        im1 = axes[1].imshow(probabilities, cmap='hot', vmin=0, vmax=1)
-        axes[1].set_title('Confidence Map')
-        axes[1].axis('off')
-        plt.colorbar(im1, ax=axes[1])
+        im1 = axes[0, 1].imshow(probabilities, cmap='hot', vmin=0, vmax=1)
+        axes[0, 1].set_title('Confidence Map')
+        axes[0, 1].axis('off')
+        self.plt.colorbar(im1, ax=axes[0, 1])
         
         # Binary prediction
-        axes[2].imshow(prediction, cmap='gray')
-        axes[2].set_title(f'Prediction (threshold={threshold})')
-        axes[2].axis('off')
+        axes[1, 0].imshow(prediction, cmap='gray')
+        axes[1, 0].set_title(f'Prediction (threshold={threshold})')
+        axes[1, 0].axis('off')
         
-        plt.tight_layout()
+        # Original with mask borders
+        axes[1, 1].imshow(overlay_image)
+        axes[1, 1].set_title('Original + Mask Borders')
+        axes[1, 1].axis('off')
+        
+        self.plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            self.plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Visualization saved to: {save_path}")
+            
+            # Also save just the overlay image
+            overlay_only_path = save_path.replace('.png', '_overlay_borders.png')
+            cv2.imwrite(overlay_only_path, cv2.cvtColor(overlay_image, cv2.COLOR_RGB2BGR))
+            print(f"Border overlay saved to: {overlay_only_path}")
+        
+        # Close the figure to free memory
+        self.plt.close()
         
         # plt.show()
     
@@ -376,36 +468,54 @@ class ModelTester:
         # Make prediction
         prediction, probabilities, resized_image, original_image = self.predict(image_path, threshold)
         
-        # Create overlay (red for predicted weeds)
-        overlay = resized_image.copy()
-        overlay[prediction > threshold] = [255, 0, 0]  # Red overlay for weeds
+        # Create filled overlay (red for predicted weeds)
+        filled_overlay = resized_image.copy()
+        filled_overlay[prediction > threshold] = [255, 0, 0]  # Red overlay for weeds
         
-        # Blend with original image
+        # Blend filled overlay with original image
         alpha = 0.3
-        result = cv2.addWeighted(resized_image, 1-alpha, overlay, alpha, 0)
+        filled_result = cv2.addWeighted(resized_image, 1-alpha, filled_overlay, alpha, 0)
         
-        # Display
-        plt.figure(figsize=(12, 6))
+        # Create border overlay (green borders)
+        mask_borders = self.create_mask_borders(prediction > threshold)
+        border_result = self.overlay_mask_borders(resized_image, mask_borders, color=[0, 255, 0], thickness=2)
         
-        plt.subplot(1, 2, 1)
-        plt.imshow(resized_image)
-        plt.title('Original Image')
-        plt.axis('off')
+        # Display with 3 subplots
+        self.plt.figure(figsize=(18, 6))
         
-        plt.subplot(1, 2, 2)
-        plt.imshow(result)
-        plt.title('Weed Detection Overlay')
-        plt.axis('off')
+        self.plt.subplot(1, 3, 1)
+        self.plt.imshow(resized_image)
+        self.plt.title('Original Image')
+        self.plt.axis('off')
         
-        plt.tight_layout()
+        self.plt.subplot(1, 3, 2)
+        self.plt.imshow(filled_result)
+        self.plt.title('Filled Weed Detection')
+        self.plt.axis('off')
+        
+        self.plt.subplot(1, 3, 3)
+        self.plt.imshow(border_result)
+        self.plt.title('Border Weed Detection')
+        self.plt.axis('off')
+        
+        self.plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            self.plt.savefig(save_path, dpi=300, bbox_inches='tight')
             print(f"Overlay saved to: {save_path}")
             
-            # Also save just the overlay image
-            overlay_path = save_path.replace('.png', '_overlay_only.png')
-            cv2.imwrite(overlay_path, cv2.cvtColor(result, cv2.COLOR_RGB2BGR))
+            # Save individual overlay images
+            filled_path = save_path.replace('.png', '_filled_overlay.png')
+            cv2.imwrite(filled_path, cv2.cvtColor(filled_result, cv2.COLOR_RGB2BGR))
+            
+            border_path = save_path.replace('.png', '_border_overlay.png')
+            cv2.imwrite(border_path, cv2.cvtColor(border_result, cv2.COLOR_RGB2BGR))
+            
+            print(f"Filled overlay saved to: {filled_path}")
+            print(f"Border overlay saved to: {border_path}")
+        
+        # Close the figure to free memory
+        self.plt.close()
         
         # plt.show()
         
